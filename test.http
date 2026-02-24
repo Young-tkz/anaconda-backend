@@ -1,0 +1,9 @@
+### Tell WebStorm to wait for 5 minutes
+# @timeout 300000
+
+POST http://localhost:5000/api/analyze
+Content-Type: application/json
+
+{
+  "url": "https://www.amazon.in/dp/B071YZMJSC"
+}

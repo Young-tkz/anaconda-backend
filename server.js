@@ -26,10 +26,16 @@ app.post('/api/analyze', async (req, res) => {
     try {
         console.log(`🚀 Striking ASIN: ${asin}...`);
 
-        // 🟢 LIGHTWEIGHT LAUNCH: Better for Railway memory
+        // 🟢 ULTRA-LIGHTWEIGHT LAUNCH: Critical for Railway free tier
         browser = await chromium.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage', // Uses disk instead of RAM
+                '--disable-gpu',           // Saves massive memory
+                '--single-process'         // Keeps engine footprint small
+            ]
         });
 
         const context = await browser.newContext({
@@ -37,29 +43,39 @@ app.post('/api/analyze', async (req, res) => {
         });
 
         const page = await context.newPage();
+
+        // 🟢 RESOURCE BLOCKER: Stops memory-heavy images/css/fonts from loading
+        await page.route('**/*', (route) => {
+            const type = route.request().resourceType();
+            if (['image', 'stylesheet', 'font', 'media'].includes(type)) {
+                route.abort();
+            } else {
+                route.continue();
+            }
+        });
+
         let allReviews = [];
-        // Only checking 3 filters to save memory/time in the cloud
         const starFilters = ['one_star', 'three_star', 'five_star'];
 
         for (const filter of starFilters) {
             const reviewUrl = `https://www.amazon.in/product-reviews/${asin}/ref=cm_cr_arp_d_viewopt_sr?reviewerType=all_reviews&filterByStar=${filter}&pageNumber=1`;
             
             try {
+                // Use 'domcontentloaded' to finish faster since we blocked images/css
                 await page.goto(reviewUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
                 
-                // Scrape first page only for speed
                 const pageReviews = await page.$$eval('[data-hook="review-body"]', els => 
                     els.map(el => el.innerText.trim()).filter(t => t.length > 20)
                 );
                 allReviews = allReviews.concat(pageReviews);
-                console.log(`✅ Collected ${filter}`);
+                console.log(`✅ Collected ${filter} - Count: ${pageReviews.length}`);
             } catch (e) {
-                console.log(`📡 Skip ${filter}`);
+                console.log(`📡 Skip ${filter}: ${e.message}`);
             }
         }
 
         const total = allReviews.length;
-        if (total === 0) throw new Error("No reviews found");
+        if (total === 0) throw new Error("No reviews captured. Cloud IP may be throttled.");
 
         // Analysis
         let positiveCount = 0;
@@ -71,18 +87,22 @@ app.post('/api/analyze', async (req, res) => {
         res.json({
             asin,
             verdict: posRate >= 50 ? "BUY" : "AVOID",
-            confidence: `${Math.min(total * 5, 100)}%`,
+            confidence: `${Math.min(total * 10, 100)}%`,
             total_reviews: total,
+            positivity_rate: `${posRate.toFixed(1)}%`,
             ai_summary: posRate >= 50 ? "✅ Verified Quality" : "🚨 Risk Detected"
         });
 
     } catch (err) {
-        console.error("❌ Error:", err.message);
+        console.error("❌ Scraper Error:", err.message);
         res.status(500).json({ error: "Scraper failed" });
     } finally {
-        if (browser) await browser.close();
+        if (browser) {
+            console.log("🧹 Closing browser to free memory...");
+            await browser.close();
+        }
     }
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => console.log(`🌐 Engine Online on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🌐 Engine Online on port ${PORT}`));

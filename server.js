@@ -26,18 +26,23 @@ app.post('/api/analyze', async (req, res) => {
     if (!asinMatch) return res.status(400).json({ error: "Invalid Amazon URL" });
     const asin = asinMatch[1];
 
-    // 🟢 PERSISTENT STORAGE: This folder saves your login cookies
-    const userDataDir = './amazon_session';
+    // 🟢 FIXED: Use /tmp for cloud environments so Railway has permission to write
+    const userDataDir = '/tmp/amazon_session';
 
     try {
         console.log(`🚀 Starting Persistent Stealth Deep-Dive for ASIN: ${asin}...`);
 
-        // Launching with a persistent context to stay logged in
-        const context = await chromium.newContext(userDataDir, {
-            headless: true,
+        // 🟢 FIXED: launchPersistentContext is a top-level command in Playwright
+        const context = await chromium.launchPersistentContext(userDataDir, {
+            headless: true, // Required for cloud deployment
             viewport: { width: 1280, height: 720 },
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            args: ['--disable-blink-features=AutomationControlled']
+            // 🟢 FIXED: Added --no-sandbox and --disable-setuid-sandbox for Linux/Railway stability
+            args: [
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox'
+            ]
         });
 
         // Use the first open page or create a new one
@@ -92,7 +97,7 @@ app.post('/api/analyze', async (req, res) => {
         const total = allReviews.length;
         if (total === 0) {
             await context.close();
-            return res.status(404).json({ error: "No reviews captured. Manual login might be needed in the browser window." });
+            return res.status(404).json({ error: "No reviews captured. Cloud IP may be blocked." });
         }
 
         // --- ANALYSIS LOGIC ---
@@ -111,8 +116,7 @@ app.post('/api/analyze', async (req, res) => {
 
         const posRate = (positiveCount / total) * 100;
         const sortedComplaints = Object.entries(complaintMap).sort((a,b) => b[1] - a[1]);
-        const topIssue = sortedComplaints.length > 0 ? sortedComplaints[0] : ["general quality", 0];
-
+        
         const finalResult = {
             asin,
             verdict: posRate >= 60 ? "BUY" : posRate >= 40 ? "CAUTION" : "AVOID",
@@ -123,11 +127,12 @@ app.post('/api/analyze', async (req, res) => {
             ai_summary: posRate >= 60 ? "✅ SOLID CHOICE" : "🚨 PROCEED WITH CAUTION"
         };
 
-        await context.close(); // Closes the whole persistent context
+        await context.close(); 
         res.json(finalResult);
 
     } catch (err) {
         console.error("❌ Scraper Error:", err.message);
+        // Ensure context closes even on error to prevent memory leaks
         res.status(500).json({ error: "Analysis failed" });
     }
 });
